@@ -115,6 +115,32 @@ services:
       - ./config:/app/config:ro
     restart: "no"
 
+  api:
+    build: ./api
+    container_name: finance-api
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      - POSTGRES_HOST=${POSTGRES_HOST}
+      - POSTGRES_PORT=${POSTGRES_PORT}
+      - POSTGRES_DB=${POSTGRES_DB}
+      # use read-only creds here
+      - POSTGRES_USER=${POSTGRES_READONLY_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_READONLY_PASSWORD}
+      - POSTGRES_RO_USER=${POSTGRES_READONLY_USER}
+      - POSTGRES_RO_PASSWORD=${POSTGRES_READONLY_PASSWORD}
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8000/healthz >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+
+
 
 
 
