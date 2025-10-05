@@ -17,6 +17,26 @@ services:
       interval: 10s
       timeout: 5s
       retries: 10
+  db-bootstrap:
+    image: postgres:16
+    container_name: finance-db-bootstrap
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      - POSTGRES_HOST=${POSTGRES_HOST}
+      - POSTGRES_PORT=${POSTGRES_PORT}
+      - POSTGRES_DB=${POSTGRES_DB}
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+    volumes:
+      - ./db/admin:/app/db/admin:ro
+      - ./db/migrations:/app/db/migrations:ro
+      - ./ops/scripts:/app/ops/scripts:ro
+    command: ["/bin/bash", "/app/ops/scripts/bootstrap.sh"]
+    restart: "no"
+
 
 volumes:
   db_data:
