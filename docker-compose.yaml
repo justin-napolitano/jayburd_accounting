@@ -140,6 +140,20 @@ services:
       retries: 5
       start_period: 5s
 
+  scheduler:
+    build: ./scheduler
+    container_name: finance-scheduler
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      - COMPOSE_FILE=/workspace/docker-compose.yml
+    volumes:
+      - .:/workspace:ro
+      - ${DOCKER_SOCK_PATH}:/var/run/docker.sock
+    restart: unless-stopped
+
+
 
 
 
