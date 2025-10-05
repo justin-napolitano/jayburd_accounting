@@ -4,6 +4,9 @@ from typing import Optional, List
 import os, psycopg
 from datetime import datetime, date
 from dateutil import parser as dparse
+from calendar import monthrange
+from dateutil import parser as dparse
+
 
 DB_DSN = (
     f"host={os.environ['POSTGRES_HOST']} "
@@ -18,6 +21,19 @@ app = FastAPI(title="Finance OS API", version="0.1.0")
 def rows(q, cur):
     cols = [d[0] for d in cur.description]
     return [dict(zip(cols, r)) for r in q]
+
+def _coerce_date_start(s: str) -> str:
+    s = s.strip()
+    if len(s) == 7 and s[4] == "-":  # YYYY-MM
+        s = f"{s}-01"
+    return dparse.parse(s).date().isoformat()
+
+def _coerce_date_end(s: str) -> str:
+    s = s.strip()
+    if len(s) == 7 and s[4] == "-":  # YYYY-MM -> last day of month
+        y, m = map(int, s.split("-"))
+        s = f"{s}-{monthrange(y, m)[1]}"
+    return dparse.parse(s).date().isoformat()
 
 @app.get("/healthz")
 def healthz():
@@ -46,9 +62,11 @@ def spend_monthly(frm: Optional[str]=Query(None), to: Optional[str]=Query(None))
     where=[]
     params=[]
     if frm:
+        frm = _coerce_date_start(frm)
         where.append("month >= date_trunc('month', %s::date)")
         params.append(frm)
     if to:
+        to = _coerce_date_end(to)
         where.append("month <= date_trunc('month', %s::date)")
         params.append(to)
     sql = "select * from v_monthly_spend"
