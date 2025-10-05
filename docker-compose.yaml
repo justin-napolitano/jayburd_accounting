@@ -37,6 +37,50 @@ services:
     command: ["/bin/bash", "/app/ops/scripts/bootstrap.sh"]
     restart: "no"
 
+  ingestor-email:
+    build: ./ingestor-email
+    container_name: finance-ingestor-email
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      - POSTGRES_HOST=${POSTGRES_HOST}
+      - POSTGRES_PORT=${POSTGRES_PORT}
+      - POSTGRES_DB=${POSTGRES_DB}
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - IMAP_HOST=${IMAP_HOST}
+      - IMAP_USER=${IMAP_USER}
+      - IMAP_PASS=${IMAP_PASS}
+      - IMAP_FOLDER=${IMAP_FOLDER}
+      - RAW_DIR=${RAW_DIR}
+      - BANK_NAME=${BANK_NAME}
+    volumes:
+      - raw_data:/data/raw
+    restart: "no"
+
+  normalizer:
+    build: ./normalizer
+    container_name: finance-normalizer
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      - POSTGRES_HOST=${POSTGRES_HOST}
+      - POSTGRES_PORT=${POSTGRES_PORT}
+      - POSTGRES_DB=${POSTGRES_DB}
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - RAW_DIR=${RAW_DIR}
+    volumes:
+      - raw_data:/data/raw
+    restart: "no"
+
+
+
 
 volumes:
   db_data:
+  raw_data:
