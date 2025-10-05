@@ -1,0 +1,58 @@
+# priority asc wins first; includes/excludes matched against normalized_desc (case-insensitive)
+- name: rent
+  priority: 5
+  includes: ["RENT"]
+  excludes: []
+  category_code: RENT
+  amount_min: -4000
+  amount_max: -400
+
+- name: walmart groceries
+  priority: 10
+  includes: ["WALMART", "WM SUPERCENTER"]
+  excludes: ["FUEL", "MONEY CENTER"]
+  category_code: GROCERIES
+
+- name: spotify
+  priority: 10
+  includes: ["SPOTIFY"]
+  excludes: []
+  category_code: SUBSCRIPTIONS
+  amount_min: -20
+  amount_max: -5
+
+- name: amazon shopping
+  priority: 20
+  includes: ["AMAZON"]
+  excludes: ["AWS", "AMZN WEB SERVICES"]
+  category_code: SHOPPING
+
+- name: coffee
+  priority: 30
+  includes: ["STARBUCKS", "COFFEE"]
+  excludes: []
+  category_code: DINING
+
+- name: fuel
+  priority: 30
+  includes: ["SHELL", "CHEVRON", "EXXON", "BP", "GAS STATION"]
+  excludes: []
+  category_code: TRANSPORT
+
+- name: utilities
+  priority: 30
+  includes: ["ELECTRIC", "UTILITY", "POWER", "WATER", "SEWER"]
+  excludes: []
+  category_code: UTILITIES
+
+- name: atm cash
+  priority: 40
+  includes: ["ATM WITHDRAWAL"]
+  excludes: []
+  category_code: CASH
+
+- name: transfers
+  priority: 50
+  includes: ["TRANSFER FROM", "TRANSFER TO", "INTERNAL TRANSFER"]
+  excludes: []
+  category_code: TRANSFERS
