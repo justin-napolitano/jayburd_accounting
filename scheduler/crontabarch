@@ -1,0 +1,8 @@
+# every 15 min: pull email, then normalize
+*/15 * * * * cd /workspace && docker compose -p "$COMPOSE_PROJECT_NAME" run --rm --no-deps ingestor-email && docker compose -p "$COMPOSE_PROJECT_NAME" run --rm --no-deps normalizer
+
+# hourly: rules
+0 * * * * cd /workspace && docker compose -p "$COMPOSE_PROJECT_NAME" run --rm --no-deps classifier
+
+# daily 2:10am: budgets
+10 2 * * * cd /workspace && docker compose -p "$COMPOSE_PROJECT_NAME" run --rm --no-deps budgeter

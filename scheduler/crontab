@@ -1,8 +1,3 @@
-# every 15 min: pull email, then normalize
-*/15 * * * * cd /workspace && docker-compose run --rm ingestor-email && docker-compose run --rm normalizer
-
-# hourly: rules
-0 * * * * cd /workspace && docker-compose run --rm classifier
-
-# daily 2:10am: budgets (idempotent)
-10 2 * * * cd /workspace && docker-compose run --rm budgeter
+*/15 * * * * docker compose -p "$COMPOSE_PROJECT_NAME" --project-directory "$HOST_WORKSPACE" -f "$HOST_WORKSPACE/docker-compose.yaml" run --rm --no-deps ingestor-email && docker compose -p "$COMPOSE_PROJECT_NAME" --project-directory "$HOST_WORKSPACE" -f "$HOST_WORKSPACE/docker-compose.yaml" run --rm --no-deps normalizer
+0   * * * * docker compose -p "$COMPOSE_PROJECT_NAME" --project-directory "$HOST_WORKSPACE" -f "$HOST_WORKSPACE/docker-compose.yaml" run --rm --no-deps classifier
+10  2 * * * docker compose -p "$COMPOSE_PROJECT_NAME" --project-directory "$HOST_WORKSPACE" -f "$HOST_WORKSPACE/docker-compose.yaml" run --rm --no-deps budgeter

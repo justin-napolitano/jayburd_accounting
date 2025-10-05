@@ -147,10 +147,12 @@ services:
       db:
         condition: service_healthy
     environment:
-      - COMPOSE_FILE=/workspace/docker-compose.yml
+      - COMPOSE_FILE=/workspace/docker-compose.yaml
+      - COMPOSE_PROJECT_NAME=${COMPOSE_PROJECT_NAME}
+      - HOST_WORKSPACE=${HOST_WORKSPACE}      
     volumes:
-      - .:/workspace:ro
       - ${DOCKER_SOCK_PATH}:/var/run/docker.sock
+      - ${HOST_WORKSPACE}:${HOST_WORKSPACE}:ro
     restart: unless-stopped
 
 
