@@ -78,6 +78,25 @@ services:
       - raw_data:/data/raw
     restart: "no"
 
+  classifier:
+    build: ./classifier
+    container_name: finance-classifier
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      - POSTGRES_HOST=${POSTGRES_HOST}
+      - POSTGRES_PORT=${POSTGRES_PORT}
+      - POSTGRES_DB=${POSTGRES_DB}
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - CLASSIFY_LOOKBACK_DAYS=180
+      - RULES_PATH=/app/config/rules.yaml
+    volumes:
+      - ./config:/app/config:ro
+
+
 
 
 
