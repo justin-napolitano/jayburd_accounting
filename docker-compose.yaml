@@ -132,7 +132,7 @@ services:
       - POSTGRES_RO_USER=${POSTGRES_READONLY_USER}
       - POSTGRES_RO_PASSWORD=${POSTGRES_READONLY_PASSWORD}
     ports:
-      - "8000:8000"
+      - "8010:8000"
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:8000/healthz >/dev/null 2>&1 || exit 1"]
       interval: 10s
