@@ -156,10 +156,29 @@ services:
     restart: unless-stopped
 
 
-
+  backup:
+    build: ./backup
+    container_name: finance-backup
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      - POSTGRES_HOST=${POSTGRES_HOST}
+      - POSTGRES_PORT=${POSTGRES_PORT}
+      - POSTGRES_DB=${POSTGRES_DB}
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - BACKUP_DIR=${BACKUP_DIR}
+      - BACKUP_INTERVAL_SECONDS=${BACKUP_INTERVAL_SECONDS}
+      - BACKUP_KEEP_COUNT=${BACKUP_KEEP_COUNT}
+    volumes:
+      - backups:/backups
+    restart: unless-stopped
 
 
 
 volumes:
   db_data:
   raw_data:
+  backups:
