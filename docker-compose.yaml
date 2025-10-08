@@ -176,6 +176,51 @@ services:
       - backups:/backups
     restart: unless-stopped
 
+  teller-sync:
+    build:
+      context: ./teller-sync
+    container_name: finance-teller-sync
+    env_file: .env
+    environment:
+      - POSTGRES_HOST=${POSTGRES_HOST}
+      - POSTGRES_PORT=${POSTGRES_PORT}
+      - POSTGRES_DB=${POSTGRES_DB}
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - TELLER_BASE_URL=${TELLER_BASE_URL}
+      - TELLER_CERT=${TELLER_CERT_PATH}
+      - TELLER_KEY=${TELLER_KEY_PATH}
+      - TELLER_CA_PATH=${TELLER_CA_PATH}
+      - TELLER_SINCE_DAYS=${TELLER_SINCE_DAYS}
+      - TZ=${TZ}
+    volumes:
+      - ./secrets/teller:/secrets/teller:ro
+    depends_on:
+      db:
+        condition: service_healthy
+    command: ["python", "/app/sync.py"]
+    restart: "no"
+
+  teller-webhook:
+    build:
+      context: ./teller-webhook
+    container_name: finance-teller-webhook
+    env_file: .env
+    environment:
+      - POSTGRES_HOST=${POSTGRES_HOST}
+      - POSTGRES_PORT=${POSTGRES_PORT}
+      - POSTGRES_DB=${POSTGRES_DB}
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - TELLER_WEBHOOK_SECRET=${TELLER_WEBHOOK_SECRET}
+      - TZ=${TZ}
+    ports:
+      - "${WEBHOOK_PORT:-8081}:8081"
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
 
 
 volumes:
