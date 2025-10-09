@@ -191,6 +191,8 @@ services:
       - TELLER_CERT=${TELLER_CERT_PATH}
       - TELLER_KEY=${TELLER_KEY_PATH}
       - FIN_ENC_KEY=${FIN_ENC_KEY}
+      - TELLER_ENROLLMENT_ID=${TELLER_ENROLLMENT_ID}
+      - TELLER_ACCESS_TOKEN=${TELLER_ACCESS_TOKEN}
       #- TELLER_CA_PATH=${TELLER_CA_PATH}
       - TELLER_SINCE_DAYS=${TELLER_SINCE_DAYS}
       - TZ=${TZ}
@@ -200,6 +202,34 @@ services:
       db:
         condition: service_healthy
     command: ["python", "/app/sync.py"]
+    restart: "no"
+
+  teller-enroll:
+    build:
+      context: ./teller-sync
+    container_name: finance-teller-enroll
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      - POSTGRES_HOST=${POSTGRES_HOST}
+      - POSTGRES_PORT=${POSTGRES_PORT}
+      - POSTGRES_DB=${POSTGRES_DB}
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - TELLER_BASE_URL=${TELLER_BASE_URL}
+      - TELLER_CERT=${TELLER_CERT_PATH}
+      - TELLER_KEY=${TELLER_KEY_PATH}
+      - TELLER_AUTH_STYLE=${TELLER_AUTH_STYLE:-basic}
+      - TELLER_ENROLLMENT_ID=${TELLER_ENROLLMENT_ID}
+      - TELLER_ACCESS_TOKEN=${TELLER_ACCESS_TOKEN}
+      - TELLER_SINCE_DAYS=${TELLER_SINCE_DAYS:-30}
+      - FIN_ENC_KEY=${FIN_ENC_KEY}
+      - TZ=${TZ}
+    volumes:
+      - ./secrets/teller:/secrets/teller:ro
+    command: ["python", "/app/enroll.py"]
     restart: "no"
 
   teller-webhook:
