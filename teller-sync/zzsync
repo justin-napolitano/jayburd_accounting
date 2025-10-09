@@ -11,13 +11,13 @@ DB_DSN = (
     f"password={os.environ['POSTGRES_PASSWORD']}"
 )
 
-BASE_URL    = os.getenv("TELLER_BASE_URL", "https://api.teller.io").rstrip("/")
-CERT_PATH   = os.environ["TELLER_CERT"]
-KEY_PATH    = os.environ["TELLER_KEY"]
-CA_PATH     = os.getenv("TELLER_CA_PATH", "/etc/ssl/certs/ca-certificates.crt")
-SINCE_DAYS  = int(os.getenv("TELLER_SINCE_DAYS", "30"))
-FIN_ENC_KEY = os.getenv("FIN_ENC_KEY")
-ENV_TOKEN   = os.getenv("TELLER_ACCESS_TOKEN")  # optional one-off
+BASE_URL   = os.getenv("TELLER_BASE_URL", "https://api.teller.io").rstrip("/")
+CERT_PATH  = os.environ["TELLER_CERT"]
+KEY_PATH   = os.environ["TELLER_KEY"]
+CA_PATH    = os.getenv("TELLER_CA_PATH", "/etc/ssl/certs/ca-certificates.crt")
+SINCE_DAYS = int(os.getenv("TELLER_SINCE_DAYS", "30"))
+FIN_ENC_KEY = os.getenv("FIN_ENC_KEY")  # required if loading tokens from DB
+ENV_TOKEN  = os.getenv("TELLER_ACCESS_TOKEN")  # optional: quick single-enrollment run
 UA = "finance-os/0.1 (teller-sync)"
 
 def pg():
@@ -29,6 +29,7 @@ def _require_file(p):
     return p
 
 def http_base():
+    # Base session with mTLS and CA validation
     s = requests.Session()
     s.headers.update({"User-Agent": UA, "Accept": "application/json"})
     s.cert = (_require_file(CERT_PATH), _require_file(KEY_PATH))
@@ -36,26 +37,19 @@ def http_base():
     return s
 
 def _basic_auth_header(token: str) -> str:
+    # Teller uses Basic auth: username=<access_token>, password=""
     b = base64.b64encode(f"{token}:".encode()).decode()
     return f"Basic {b}"
 
-def http_for_token(token: str, enrollment_header: str):
-    """
-    Build a session for a specific enrollment (usr_...) using Basic auth.
-    Teller expects X-Enrollment-Id on these endpoints.
-    """
+def http_for_token(token: str):
     s = http_base()
     s.headers["Authorization"] = _basic_auth_header(token)
-    if not enrollment_header:
-        raise RuntimeError("missing enrollment header for Teller request")
-    s.headers["X-Enrollment-Id"] = enrollment_header
     return s
 
 def jget(s, path, params=None):
-    url = f"{BASE_URL}{path}"
-    r = s.get(url, params=params, timeout=30)
+    r = s.get(f"{BASE_URL}{path}", params=params, timeout=30)
     if r.status_code == 401:
-        raise RuntimeError(f"401 Unauthorized GET {path}: {r.text[:300]}")
+        raise RuntimeError(f"401 Unauthorized for {path}. Check access token is valid for this resource.")
     if r.status_code >= 400:
         raise RuntimeError(f"HTTP {r.status_code} GET {path}: {r.text[:300]}")
     return r.json()
@@ -152,7 +146,7 @@ def upsert_tx(cur, account_id, tx):
     return cur.fetchone() is not None
 
 def _load_tokens(cur):
-    """Return list of (enrollment_id_usr, access_token)."""
+    """Return list of (enrollment_id, access_token)."""
     if ENV_TOKEN:
         return [("env", ENV_TOKEN)]
     if not FIN_ENC_KEY:
@@ -167,8 +161,8 @@ def _load_tokens(cur):
 
 def drain_jobs(cur, inst_id, window_start, window_end):
     """
-    Drain up to 50 jobs. Each job is tied to an enrollment (usr_...) via provider_accounts.
-    We must send X-Enrollment-Id for that usr_* on every Teller request.
+    Drain up to 50 jobs. Each job is tied (via provider_accounts) to an enrollment,
+    so we fetch with the correct token.
     """
     cur.execute("""
       select j.id, j.account_api_id, pa.enrollment_id
@@ -182,26 +176,26 @@ def drain_jobs(cur, inst_id, window_start, window_end):
     if not jobs:
         return 0, 0
 
+    # Preload tokens into a dict
     tokens = dict(_load_tokens(cur))
     inserted_total = 0
     for job_id, api_id, enrollment_id in jobs:
         token = tokens.get(enrollment_id) or tokens.get("env")
         if not token:
+            # No token for this job/enrollment -> backoff
             cur.execute("update teller_jobs set attempts=attempts+1, last_error=%s, run_after=now()+interval '10 minutes' where id=%s",
                         ("no token found for enrollment", job_id))
             continue
-
-        s = http_for_token(token, enrollment_id)
+        s = http_for_token(token)
         try:
             acct = jget(s, f"/accounts/{api_id}")
             db_acct_id = upsert_account(cur, inst_id, acct)
+            # ensure provider_accounts link (in case it didn't exist)
             if enrollment_id:
                 upsert_provider_account(cur, enrollment_id, acct)
-
             txs = jget(s, f"/accounts/{api_id}/transactions", params={"from": window_start.isoformat()})
             inserted = sum(1 for tx in txs if upsert_tx(cur, db_acct_id, tx))
             inserted_total += inserted
-
             cur.execute("delete from teller_jobs where id=%s", (job_id,))
             cur.execute("""
               insert into teller_sync(account_id, last_polled_at, last_window_start, last_window_end)
@@ -215,19 +209,14 @@ def drain_jobs(cur, inst_id, window_start, window_end):
             cur.execute("update teller_jobs set attempts=attempts+1, last_error=%s, run_after=now()+interval '5 minutes' where id=%s",
                         (str(e)[:500], job_id))
             print(f"[sync] job {job_id} failed: {e}", file=sys.stderr)
-
     return inserted_total, len(jobs)
 
 def sweep_all_enrollments(cur, inst_id, window_start, window_end):
-    """
-    Fallback sweep: iterate all active enrollments and pull accounts+transactions.
-    Requires X-Enrollment-Id per enrollment.
-    """
     tokens = _load_tokens(cur)
     touched_total = 0
     inserted_total = 0
     for enrollment_id, token in tokens:
-        s = http_for_token(token, enrollment_id if enrollment_id != "env" else os.getenv("TELLER_ENROLLMENT_ID",""))
+        s = http_for_token(token)
         try:
             accounts = jget(s, "/accounts")
         except Exception as e:
@@ -235,14 +224,11 @@ def sweep_all_enrollments(cur, inst_id, window_start, window_end):
             continue
         if isinstance(accounts, dict) and "data" in accounts:
             accounts = accounts["data"]
-
         for acct in accounts or []:
             api_id = acct.get("id")
-            if not api_id:
-                continue
+            if not api_id: continue
             db_acct_id = upsert_account(cur, inst_id, acct)
-            if enrollment_id != "env":
-                upsert_provider_account(cur, enrollment_id, acct)
+            upsert_provider_account(cur, enrollment_id, acct)
             touched_total += 1
             try:
                 txs = jget(s, f"/accounts/{api_id}/transactions", params={"from": window_start.isoformat()})
