@@ -1,3 +1,15 @@
-*/15 * * * * docker compose -p "$COMPOSE_PROJECT_NAME" --project-directory "$HOST_WORKSPACE" -f "$HOST_WORKSPACE/docker-compose.yaml" run --rm --no-deps ingestor-email && docker compose -p "$COMPOSE_PROJECT_NAME" --project-directory "$HOST_WORKSPACE" -f "$HOST_WORKSPACE/docker-compose.yaml" run --rm --no-deps normalizer
-0   * * * * docker compose -p "$COMPOSE_PROJECT_NAME" --project-directory "$HOST_WORKSPACE" -f "$HOST_WORKSPACE/docker-compose.yaml" run --rm --no-deps classifier
-10  2 * * * docker compose -p "$COMPOSE_PROJECT_NAME" --project-directory "$HOST_WORKSPACE" -f "$HOST_WORKSPACE/docker-compose.yaml" run --rm --no-deps budgeter
+# every 15 min: pull email, then normalize
+#*/15 * * * * sh -lc 'docker compose -p "$COMPOSE_PROJECT_NAME" --project-directory "$HOST_WORKSPACE" -f "$HOST_WORKSPACE/docker-compose.yaml" run --rm --no-deps ingestor-email && docker compose -p "$COMPOSE_PROJECT_NAME" --project-directory "$HOST_WORKSPACE" -f "$HOST_WORKSPACE/docker-compose.yaml" run --rm --no-deps normalizer'
+
+# hourly: rules
+0 * * * * sh -lc 'docker compose -p "$COMPOSE_PROJECT_NAME" --project-directory "$HOST_WORKSPACE" -f "$HOST_WORKSPACE/docker-compose.yaml" run --rm --no-deps classifier'
+
+# daily 2:10am: budgets
+10 2 * * * sh -lc 'docker compose -p "$COMPOSE_PROJECT_NAME" --project-directory "$HOST_WORKSPACE" -f "$HOST_WORKSPACE/docker-compose.yaml" run --rm --no-deps budgeter'
+
+# daily 6:10am: refresh Teller enrollment (rotated token / new accounts)
+10 6 * * 1 sh -lc 'docker compose -p "$COMPOSE_PROJECT_NAME" --project-directory "$HOST_WORKSPACE" -f "$HOST_WORKSPACE/docker-compose.yaml" run --rm --no-deps teller-enroll'
+
+# daily 6:20am: Teller sync sweep (pulls last 2 days for ALL enrollments)
+# bump TELLER_SINCE_DAYS in .env if you want a wider cushion
+20 6 * * * sh -lc 'docker compose -p "$COMPOSE_PROJECT_NAME" --project-directory "$HOST_WORKSPACE" -f "$HOST_WORKSPACE/docker-compose.yaml" run --rm -e TELLER_SINCE_DAYS="${TELLER_SINCE_DAYS:-2}" teller-sync'
