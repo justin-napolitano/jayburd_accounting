@@ -131,8 +131,10 @@ services:
       - POSTGRES_PASSWORD=${POSTGRES_READONLY_PASSWORD}
       - POSTGRES_RO_USER=${POSTGRES_READONLY_USER}
       - POSTGRES_RO_PASSWORD=${POSTGRES_READONLY_PASSWORD}
-    ports:
-      - "8010:8000"
+    #ports:
+     # - "8010:8000"
+    expose:
+      - "8000"
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:8000/healthz >/dev/null 2>&1 || exit 1"]
       interval: 10s
@@ -256,10 +258,24 @@ services:
     build:
       context: ./finance-web
       args:
-        NEXT_PUBLIC_API_BASE: "http://192.168.1.115:8010"
+        NEXT_PUBLIC_API_BASE: "/api"
     environment:
       - NEXT_PUBLIC_API_BASE=http://192.168.1.115:8010  # keeps server-side code happy too
-    ports: ["3020:3020"]
+    #ports: ["3020:3020"]
+    expose: 
+      - "3020"
+    restart: unless-stopped
+  
+  reverse-proxy:
+    image: nginx:1.27-alpine
+    container_name: finance-proxy
+    depends_on:
+      - finance-web
+      - api
+    ports:
+      - "3020:80"         # expose one port to the LAN
+    volumes:
+      - ./ops/reverse-proxy/nginx.conf:/etc/nginx/nginx.conf:ro
     restart: unless-stopped
 
 

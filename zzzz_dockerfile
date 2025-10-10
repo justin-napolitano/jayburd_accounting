@@ -1,0 +1,62 @@
+# ---------- base deps ----------
+FROM node:20-alpine AS deps
+WORKDIR /app
+
+RUN apk add --no-cache libc6-compat
+
+# Copy manifests (lock is optional)
+COPY package*.json ./
+
+# Install: use npm ci if lock exists, otherwise fall back to npm install
+# Alpine's /bin/sh is fine with this
+RUN if [ -f package-lock.json ]; then \
+      npm ci --no-audit --no-fund; \
+    else \
+      npm install --no-audit --no-fund; \
+    fi \
+ && npm cache clean --force
+
+
+# ---------- builder ----------
+FROM node:20-alpine AS builder
+WORKDIR /app
+RUN apk add --no-cache libc6-compat
+
+# Build-time API base for the BROWSER bundle
+ARG NEXT_PUBLIC_API_BASE
+ENV NEXT_PUBLIC_API_BASE=${NEXT_PUBLIC_API_BASE}
+
+# Bring in node_modules from deps stage
+COPY --from=deps /app/node_modules ./node_modules
+# Copy the rest of the app
+COPY . .
+
+# Build Next.js (client gets NEXT_PUBLIC_* baked here)
+ENV NODE_ENV=production
+RUN npm run build \
+ && rm -rf /root/.npm
+
+# ---------- runner ----------
+FROM node:20-alpine AS runner
+WORKDIR /app
+RUN apk add --no-cache libc6-compat
+
+ENV NODE_ENV=production
+ENV PORT=3020
+ENV HOSTNAME=0.0.0.0
+
+# Copy only what's needed to run
+# If you use Next.js "output: standalone", this becomes even smaller.
+COPY --from=builder /app/.next ./.next
+COPY --from=builder /app/public ./public
+COPY --from=builder /app/package.json ./package.json
+COPY --from=deps    /app/node_modules ./node_modules
+
+# Prune devDependencies to cut size
+RUN npm prune --omit=dev --no-audit --no-fund \
+ && npm cache clean --force
+
+EXPOSE 3020
+
+# If you use a custom script, adjust accordingly.
+CMD ["npm", "run", "start"]
