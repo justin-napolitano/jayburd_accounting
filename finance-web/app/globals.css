@@ -1,0 +1,14 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body { @apply bg-neutral-950 text-neutral-100; }
+.container { @apply mx-auto max-w-7xl px-4; }
+.card { @apply bg-neutral-900 rounded-2xl shadow p-4; }
+.kpi { @apply card flex flex-col gap-2; }
+.btn { @apply inline-flex items-center gap-2 rounded-xl px-3 py-2 bg-neutral-800 hover:bg-neutral-700; }
+.input { @apply bg-neutral-900 border border-neutral-800 rounded-xl px-3 py-2; }
+.table { @apply w-full text-sm; }
+.table th { @apply text-left text-neutral-300 font-medium py-2 border-b border-neutral-800; }
+.table td { @apply py-2 border-b border-neutral-900; }
+.link { @apply text-indigo-400 hover:text-indigo-300; }
