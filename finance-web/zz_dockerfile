@@ -1,4 +1,14 @@
 # finance-web/Dockerfile
+<<<<<<< HEAD
+=======
+FROM node:20-alpine AS deps
+ARG NEXT_PUBLIC_API_BASE
+ENV NEXT_PUBLIC_API_BASE=${NEXT_PUBLIC_API_BASE}
+WORKDIR /app
+COPY package.json package-lock.json* pnpm-lock.yaml* ./
+RUN npm ci --no-audit --no-fund
+
+>>>>>>> e8f60390aeb731f0882a6a606eff1de436024d61
 FROM node:20-alpine AS build
 WORKDIR /app
 ENV NEXT_PUBLIC_API_BASE=${NEXT_PUBLIC_API_BASE}
