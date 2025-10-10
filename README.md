@@ -1,6 +1,6 @@
 # Finance OS (Headless) — Docker Build & Sanity Guide
 
-This README documents how to build, run, and sanity-check each service in the headless finance stack. It assumes you’re running Docker Compose locally and using CSV/OFX email ingestion first, with a clean path to add Plaid later.
+This README documents how to build, run, and sanity-check each service in the headless finance stack. It assumes you’re running Docker Compose locally and using CSV/OFX email ingestion first, with a clean path to add Teller and other providers.
 
 ---
 
@@ -19,8 +19,14 @@ This README documents how to build, run, and sanity-check each service in the he
   - [Read-only API (api)](#7-read-only-api-api)
   - [Scheduler (scheduler)](#8-scheduler-scheduler)
   - [Backups (backup)](#9-backups-backup)
+  - [Teller Enroll (teller-enroll)](#10-teller-enroll-teller-enroll)
+  - [Teller Sync (teller-sync)](#11-teller-sync-teller-sync)
+  - [Web UI (finance-web)](#12-web-ui-finance-web)
+  - [Reverse Proxy (finance-proxy)](#13-reverse-proxy-finance-proxy)
 - [Suggested Run Order](#suggested-run-order)
 - [Troubleshooting](#troubleshooting)
+  - [Teller](#troubleshooting-teller)
+  - [Web & Proxy](#troubleshooting-web--proxy)
 - [Cloud Notes](#cloud-notes)
 
 ---
@@ -30,11 +36,12 @@ This README documents how to build, run, and sanity-check each service in the he
 - **Docker & Docker Compose** installed and running (rootless Docker is fine).
 - A **`.env`** file at repo root (see below).
 - **psql** client for DB checks (optional but useful).
-- **curl** (and optionally **jq**) for API checks.
+- **curl** (and optionally **jq**) for API/UI checks.
 
-> Host port mappings used here:
-> - Postgres exposed at **localhost:5434** → container 5432
-> - API exposed at **localhost:8010** → container 8000
+> Host port mappings used here (defaults):
+> - Postgres exposed at **localhost:5434** → container 5432  
+> - API stays internal (no host port) once reverse proxy is used  
+> - Proxy exposed at **<HOST_LAN_IP>:3020** → serves UI at `/` and API at `/api`
 
 ---
 
@@ -66,34 +73,43 @@ IMAP_FOLDER=bank-export
 RAW_DIR=/data/raw
 BANK_NAME=
 
-# API is exposed as host:8010 -> container:8000 in docker-compose.yaml
+# Teller (mTLS + Basic)
+TELLER_BASE_URL=https://api.teller.io
+TELLER_AUTH_STYLE=basic
+TELLER_ENROLLMENT_ID=usr_pjhb69paqhfgdf39js000
+TELLER_ACCESS_TOKEN=token_4yobfknid5ho4chpxo2drtcz3q
+
+# Mounted inside containers by docker-compose
+TELLER_CERT_PATH=/secrets/teller/certificate.pem
+TELLER_KEY_PATH=/secrets/teller/private_key.pem
+
+# enroll/sync window
+TELLER_SINCE_DAYS=30
 ```
 
-Tips:
-- Confirm **rootless Docker socket**:  
-  `docker context inspect default -f '{{ .Endpoints.docker.Host }}'` → typically `unix:///run/user/<uid>/docker.sock`.
-- `HOST_WORKSPACE` must be an **absolute path** to your repo on the host.
+Security hygiene on host:
+```bash
+chmod 0400 ./secrets/teller/private_key.pem
+chmod 0444 ./secrets/teller/certificate.pem
+```
 
 ---
 
 ## First-time Initialization
 
-1) **Start Postgres**  
+1) **Start Postgres**
 ```bash
 docker compose up -d db
 ```
 
-2) **Run bootstrap** (roles, grants, migrations; safe to re-run)  
+2) **Run bootstrap** (roles, grants, migrations; safe to re-run)
 ```bash
 docker compose up --no-deps db-bootstrap
 ```
 
-3) **Verify**  
+3) **Verify**
 ```bash
-# Extensions
 PGPASSWORD=$POSTGRES_PASSWORD psql -h localhost -p 5434 -U $POSTGRES_USER -d $POSTGRES_DB -c '\dx'
-
-# Migrations tracker
 PGPASSWORD=$POSTGRES_PASSWORD psql -h localhost -p 5434 -U $POSTGRES_USER -d $POSTGRES_DB -c 'table schema_migrations;'
 ```
 
@@ -101,48 +117,38 @@ PGPASSWORD=$POSTGRES_PASSWORD psql -h localhost -p 5434 -U $POSTGRES_USER -d $PO
 
 ## Service Matrix
 
-| Service          | Path               | Build                                      | Run                                              | Purpose |
-|------------------|--------------------|--------------------------------------------|--------------------------------------------------|---------|
-| `db`             | `db/`              | n/a (official image)                       | `docker compose up -d db`                        | Postgres with extensions |
-| `db-bootstrap`   | `ops/scripts/`     | n/a (official image)                       | `docker compose up --no-deps db-bootstrap`       | Idempotent roles + migrations |
-| `ingestor-email` | `ingestor-email/`  | `docker compose build ingestor-email`      | `docker compose run --rm ingestor-email`         | Pull email attachments (CSV/OFX/QFX) |
-| `normalizer`     | `normalizer/`      | `docker compose build normalizer`          | `docker compose run --rm normalizer`             | Normalize raw files to `transactions` |
-| `classifier`     | `classifier/`      | `docker compose build classifier`          | `docker compose run --rm classifier`             | Apply keyword rules → `tx_splits` |
-| `budgeter`       | `budgeter/`        | `docker compose build budgeter`            | `docker compose run --rm budgeter`               | Import monthly budgets from YAML |
-| `api`            | `api/`             | `docker compose build api`                 | `docker compose up -d api`                       | Read-only HTTP API (port 8010) |
-| `scheduler`      | `scheduler/`       | `docker compose build scheduler`           | `docker compose up -d scheduler`                 | Cron-like orchestration of jobs |
-| `backup`         | `backup/`          | `docker compose build backup`              | `docker compose up -d backup`                    | Nightly `pg_dump` rotation |
+| Service            | Path                 | Build                                      | Run                                              | Purpose |
+|--------------------|----------------------|--------------------------------------------|--------------------------------------------------|---------|
+| `db`               | `db/`                | n/a (official image)                       | `docker compose up -d db`                        | Postgres with extensions |
+| `db-bootstrap`     | `ops/scripts/`       | n/a (official image)                       | `docker compose up --no-deps db-bootstrap`       | Idempotent roles + migrations |
+| `ingestor-email`   | `ingestor-email/`    | `docker compose build ingestor-email`      | `docker compose run --rm ingestor-email`         | Pull email attachments (CSV/OFX/QFX) |
+| `normalizer`       | `normalizer/`        | `docker compose build normalizer`          | `docker compose run --rm normalizer`             | Normalize raw files to `transactions` |
+| `classifier`       | `classifier/`        | `docker compose build classifier`          | `docker compose run --rm classifier`             | Apply keyword rules → `tx_splits` |
+| `budgeter`         | `budgeter/`          | `docker compose build budgeter`            | `docker compose run --rm budgeter`               | Import monthly budgets from YAML |
+| `api`              | `api/`               | `docker compose build api`                 | `docker compose up -d api`                       | Read-only HTTP API (internal only when proxied) |
+| `scheduler`        | `scheduler/`         | `docker compose build scheduler`           | `docker compose up -d scheduler`                 | Cron-like orchestration of jobs |
+| `backup`           | `backup/`            | `docker compose build backup`              | `docker compose up -d backup`                    | Nightly `pg_dump` rotation |
+| `teller-enroll`    | `teller-sync/`       | `docker compose build teller-enroll`       | `docker compose run --rm teller-enroll`          | One-shot: upsert enrollment, fetch accounts, seed jobs |
+| `teller-sync`      | `teller-sync/`       | `docker compose build teller-sync`         | `docker compose run --rm teller-sync`            | Pull balances/transactions for seeded accounts |
+| `finance-web`      | `finance-web/`       | `docker compose build finance-web`         | internal only (served via proxy)                 | Next.js UI (built with API base `/api`) |
+| `reverse-proxy`    | `ops/reverse-proxy/` | n/a (official image)                       | `docker compose up -d reverse-proxy`             | Serves UI at `/` and proxies API at `/api` |
 
 ---
 
 ## Build, Run, and Sanity Checks
 
 ### 1) Database (`db`)
-
-**Start & health**
 ```bash
 docker compose up -d db
 docker exec -it finance-db pg_isready -U $POSTGRES_USER -d $POSTGRES_DB
-```
-
-**Extensions**  
-```bash
 PGPASSWORD=$POSTGRES_PASSWORD psql -h localhost -p 5434 -U $POSTGRES_USER -d $POSTGRES_DB -c '\dx'
 ```
-Expect: `pg_trgm`, `uuid-ossp`, `vector`.
 
 ---
 
 ### 2) Bootstrap (`db-bootstrap`)
-
-**Run (idempotent)**  
 ```bash
 docker compose up --no-deps db-bootstrap
-docker compose up --no-deps db-bootstrap   # should say already applied
-```
-
-**Verify**  
-```bash
 PGPASSWORD=$POSTGRES_PASSWORD psql -h localhost -p 5434 -U $POSTGRES_USER -d $POSTGRES_DB \
   -c "select * from schema_migrations order by applied_at desc;"
 ```
@@ -150,55 +156,29 @@ PGPASSWORD=$POSTGRES_PASSWORD psql -h localhost -p 5434 -U $POSTGRES_USER -d $PO
 ---
 
 ### 3) Email Ingestor (`ingestor-email`)
-
-**Build & run**
 ```bash
 docker compose build ingestor-email
 docker compose run --rm ingestor-email
-```
-
-**Verify**  
-```bash
 PGPASSWORD=$POSTGRES_PASSWORD psql -h localhost -p 5434 -U $POSTGRES_USER -d $POSTGRES_DB \
   -c "table ingest_files order by id desc limit 10;"
 ```
-Expect rows with `status='received'` and file metadata.
 
 ---
 
 ### 4) Normalizer (`normalizer`)
-
-**Build & run**
 ```bash
 docker compose build normalizer
 docker compose run --rm normalizer
-```
-
-**Verify**
-```bash
-# transactions landed
 PGPASSWORD=$POSTGRES_PASSWORD psql -h localhost -p 5434 -U $POSTGRES_USER -d $POSTGRES_DB \
   -c "select id, posted_at, amount, description from transactions order by id desc limit 20;"
-
-# files marked processed
-PGPASSWORD=$POSTGRES_PASSWORD psql -h localhost -p 5434 -U $POSTGRES_USER -d $POSTGRES_DB \
-  -c "table ingest_files order by id desc limit 10;"
 ```
 
 ---
 
 ### 5) Classifier (`classifier`)
-
-**Config**: ensure `config/rules.yaml` exists at repo root and is mounted to `/app/config/rules.yaml`.
-
-**Build & run**
 ```bash
 docker compose build classifier
 docker compose run --rm classifier
-```
-
-**Verify**
-```bash
 PGPASSWORD=$POSTGRES_PASSWORD psql -h localhost -p 5434 -U $POSTGRES_USER -d $POSTGRES_DB \
   -c "select t.id, t.posted_at, t.amount, t.description, c.code
       from tx_splits s
@@ -210,76 +190,33 @@ PGPASSWORD=$POSTGRES_PASSWORD psql -h localhost -p 5434 -U $POSTGRES_USER -d $PO
 ---
 
 ### 6) Budget Importer (`budgeter`)
-
-**Config**: `config/budgets.yaml` with category amounts; ensure categories are seeded (migration `0004_seed_categories.sql`).
-
-**Build & run**
 ```bash
 docker compose build budgeter
 docker compose run --rm budgeter
-```
-
-**Verify**
-```bash
-# budgets written
 PGPASSWORD=$POSTGRES_PASSWORD psql -h localhost -p 5434 -U $POSTGRES_USER -d $POSTGRES_DB \
   -c "select * from budgets order by category_id, period_start limit 20;"
-
-# view shows budget vs actual
-PGPASSWORD=$POSTGRES_PASSWORD psql -h localhost -p 5434 -U $POSTGRES_USER -d $POSTGRES_DB \
-  -c "select * from v_budget_status order by category;"
 ```
 
 ---
 
 ### 7) Read-only API (`api`)
-
-**Build & run**
+Keep API internal when proxied (no host port). Health:
 ```bash
 docker compose build api
 docker compose up -d api
-```
-
-**Health & endpoints**
-```bash
-curl -sS http://localhost:8010/healthz
-
-# accounts
-curl -sS http://localhost:8010/accounts | jq
-
-# monthly spend (dates)
-curl -sS 'http://localhost:8010/spend/monthly?frm=2025-09-01&to=2025-10-31' | jq
-
-# monthly spend (YYYY-MM supported if you applied the coercion patch)
-curl -sS 'http://localhost:8010/spend/monthly?frm=2025-09&to=2025-10' | jq
-
-# budget status
-curl -sS 'http://localhost:8010/budget/status?period=2025-10' | jq
-
-# transactions
-curl -sS 'http://localhost:8010/transactions?limit=20' | jq
-curl -sS 'http://localhost:8010/transactions?uncategorized=true&limit=50' | jq
+docker exec -it finance-api wget -qO- http://localhost:8000/healthz
 ```
 
 ---
 
 ### 8) Scheduler (`scheduler`)
-
-**Config**: In `.env`, set
-```dotenv
-HOST_WORKSPACE=/absolute/path/to/your/repo
-DOCKER_SOCK_PATH=/run/user/1000/docker.sock
-COMPOSE_PROJECT_NAME=finance   # match your running stack
-```
-
-**Build & run**
 ```bash
 docker compose build scheduler
 docker compose up -d scheduler
 docker logs -f finance-scheduler
 ```
 
-**Manual trigger (no waiting)**
+Manual “ingest → normalize → classify”:
 ```bash
 docker exec -it finance-scheduler sh -lc \
   'docker compose -p "$COMPOSE_PROJECT_NAME" --project-directory "$HOST_WORKSPACE" -f "$HOST_WORKSPACE/docker-compose.yaml" run --rm --no-deps ingestor-email && \
@@ -287,22 +224,84 @@ docker exec -it finance-scheduler sh -lc \
    docker compose -p "$COMPOSE_PROJECT_NAME" --project-directory "$HOST_WORKSPACE" -f "$HOST_WORKSPACE/docker-compose.yaml" run --rm --no-deps classifier'
 ```
 
-**Verify**: recent `ingest_files` rows and increasing `transactions` count after ticks.
-
 ---
 
 ### 9) Backups (`backup`)
-
-**Build & run**
 ```bash
 docker compose build backup
 docker compose up -d backup
-```
-
-**Verify** (after next run)
-```bash
 docker exec -it finance-backup sh -lc 'ls -lt /backups | head'
 ```
+
+---
+
+### 10) Teller Enroll (`teller-enroll`)
+
+**Sanity**
+```bash
+curl -v https://api.teller.io/accounts \
+  --cert ./secrets/teller/certificate.pem \
+  --key  ./secrets/teller/private_key.pem \
+  -H 'Accept: application/json' \
+  -H 'User-Agent: finance-os/0.1 (teller-enroll)' \
+  -H "X-Enrollment-Id: $TELLER_ENROLLMENT_ID" \
+  -u "$TELLER_ACCESS_TOKEN:"
+```
+
+**Run**
+```bash
+docker compose build teller-enroll
+docker compose run --rm teller-enroll
+```
+
+**Verify DB**
+```sql
+select count(*) from accounts where external_id like 'teller:%';
+select count(*) from teller_jobs;
+```
+
+---
+
+### 11) Teller Sync (`teller-sync`)
+```bash
+docker compose build teller-sync
+docker compose run --rm teller-sync
+PGPASSWORD=$POSTGRES_PASSWORD psql -h localhost -p 5434 -U $POSTGRES_USER -d $POSTGRES_DB \
+  -c "select posted_at, amount, description from transactions order by posted_at desc, id desc limit 20;"
+```
+
+---
+
+### 12) Web UI (`finance-web`)
+
+Build the UI with API base **`/api`** so the browser calls the proxy, not the API directly:
+```bash
+# one-time: ensure .dockerignore keeps .next, node_modules, .git out of context
+docker compose build finance-web
+```
+
+Do not publish a host port for `finance-web`. It will be served through the proxy.
+
+---
+
+### 13) Reverse Proxy (`finance-proxy`)
+
+The proxy exposes **3020** on the host, serves the UI at `/`, and forwards API calls at `/api` to the internal `api` service.
+
+Bring it up:
+```bash
+docker compose up -d reverse-proxy
+```
+
+Sanity from any device on your LAN (replace with your host IP if different):
+```bash
+curl -i http://192.168.1.115:3020/healthz          # expect 200 ok
+curl -I http://192.168.1.115:3020/                  # UI HTML headers
+curl -i http://192.168.1.115:3020/api/accounts      # API JSON, no CORS
+```
+
+Open the app:  
+`http://192.168.1.115:3020/`
 
 ---
 
@@ -313,7 +312,11 @@ docker exec -it finance-backup sh -lc 'ls -lt /backups | head'
 docker compose up -d db
 docker compose up --no-deps db-bootstrap
 
-# Ingestion loop (manual)
+# Teller: enroll accounts, then sync
+docker compose run --rm teller-enroll
+docker compose run --rm teller-sync
+
+# Email ingestion loop (manual)
 docker compose run --rm ingestor-email
 docker compose run --rm normalizer
 docker compose run --rm classifier
@@ -321,8 +324,8 @@ docker compose run --rm classifier
 # Budgets
 docker compose run --rm budgeter
 
-# API
-docker compose up -d api
+# API (internal only) + UI + Proxy
+docker compose up -d api finance-web reverse-proxy
 
 # Scheduler & backup
 docker compose up -d scheduler backup
@@ -333,7 +336,7 @@ docker compose up -d scheduler backup
 ## Troubleshooting
 
 - **API “port already allocated”**  
-  Another process uses 8000. Change mapping to `127.0.0.1:8010:8000` (already set).
+  If you previously published 8010 and now use the proxy, remove the API host port mapping. Keep API internal.
 
 - **Classifier can’t find rules**  
   Ensure `config/rules.yaml` exists and is mounted to `/app/config/rules.yaml`.
@@ -344,24 +347,61 @@ docker compose up -d scheduler backup
   - `unique (institution_id, mask) where mask is not null` on `accounts`
 
 - **Scheduler “permission denied /workspace”**  
-  Use real host path: set `HOST_WORKSPACE`, and pass `--project-directory "$HOST_WORKSPACE" -f "$HOST_WORKSPACE/docker-compose.yaml"`.
+  Set a real absolute `HOST_WORKSPACE` path and pass `--project-directory "$HOST_WORKSPACE"`.
 
 - **Scheduler “cannot connect to Docker daemon”**  
-  `DOCKER_SOCK_PATH` incorrect; set to your rootless socket and mount it.
+  Mount the correct rootless Docker socket: `DOCKER_SOCK_PATH=/run/user/<uid>/docker.sock`.
 
 - **psql “role root does not exist”**  
-  You didn’t pass credentials. Use:  
-  `PGPASSWORD=$POSTGRES_PASSWORD psql -h localhost -p 5434 -U $POSTGRES_USER -d $POSTGRES_DB -c 'select 1'`
+  Use credentials explicitly:
+  ```bash
+  PGPASSWORD=$POSTGRES_PASSWORD psql -h localhost -p 5434 -U $POSTGRES_USER -d $POSTGRES_DB -c 'select 1'
+  ```
+
+### Troubleshooting (Teller)
+
+- **401 Unauthorized**  
+  `.env` must have `TELLER_AUTH_STYLE=basic`, `TELLER_ACCESS_TOKEN` set, and you must send `X-Enrollment-Id`. Re-run `teller-enroll`.
+
+- **403 Forbidden**  
+  Environment mismatch. Ensure `TELLER_BASE_URL` matches the token’s environment.
+
+- **TLS errors**  
+  Key/cert mismatch or encrypted key. Verify modulus:
+  ```bash
+  openssl x509 -noout -modulus -in ./secrets/teller/certificate.pem
+  openssl rsa  -noout -modulus -in ./secrets/teller/private_key.pem
+  ```
+  Values must match.
+
+- **No jobs seeded**  
+  Confirm `/accounts` returns data and the `teller_jobs` uniqueness constraint exists.
+
+### Troubleshooting (Web & Proxy)
+
+- **CORS errors in browser**  
+  You bypass CORS by using the proxy. Ensure the UI was built with `NEXT_PUBLIC_API_BASE=/api`. Rebuild `finance-web` if you changed it.
+
+- **Proxy 502/404**  
+  Proxy can’t reach backends. Check service names/ports in the proxy config. From proxy container:
+  ```bash
+  docker exec -it finance-proxy sh -lc 'wget -qO- http://finance-web:3020/healthz && echo && wget -qO- http://finance-api:8000/healthz'
+  ```
+
+- **LAN access blocked**  
+  If Ubuntu `ufw` is enabled:
+  ```bash
+  sudo ufw allow from 192.168.1.0/24 to any port 3020 proto tcp
+  ```
+
+- **Frontend build failures**  
+  Components using `usePathname`, `useRouter`, `useSearchParams` must be Client Components. Add `'use client';` at the top of those files.
 
 ---
 
 ## Cloud Notes
 
-- **DB**: Cloud SQL for Postgres (private IP). Run `db-bootstrap` as a Cloud Run Job for grants + migrations.
-- **Runtime**: Build images to Artifact Registry. Deploy `api` and any webhooks to Cloud Run. Use Cloud Scheduler to trigger Cloud Run Jobs for ingestion, normalization, rules, and budgets.
-- **Secrets**: Move env secrets to Secret Manager.
-- **Backups**: Push dumps to GCS with lifecycle rules (e.g., 30–90 days).
-
----
-
-Keep this README at repo root. New environments should be reproducible from scratch using these steps and checks.
+- **DB**: Managed Postgres (private IP). Run `db-bootstrap` as a job for grants + migrations.
+- **Runtime**: Build images to a registry. Deploy `api`, `web`, and `proxy`. Use a scheduler for ingestion, normalization, rules, and budgets.
+- **Secrets**: Move env secrets to a secrets manager and mount/inject at runtime.
+- **Backups**: Dump to object storage with lifecycle policies (30–90 days).
