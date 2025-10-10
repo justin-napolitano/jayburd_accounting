@@ -1,3 +1,4 @@
+'use client';
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Home, CreditCard, Wallet, Settings, Calendar } from "lucide-react";
