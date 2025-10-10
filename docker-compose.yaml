@@ -252,6 +252,15 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  finance-web:
+    build: ./finance-web
+    container_name: finance-web
+    environment:
+      - NEXT_PUBLIC_API_BASE=http://192.168.1.115:8010
+    ports:
+      - "3020:3020"
+    restart: unless-stopped
+
 
 
 volumes:
