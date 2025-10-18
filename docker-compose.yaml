@@ -274,8 +274,10 @@ services:
       #- api
     ports:
       - "3020:80"         # expose one port to the LAN
+      - "3021:443"   # HTTPS  <-- add this
     volumes:
       - ./ops/reverse-proxy/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./ops/reverse-proxy/certs:/etc/nginx/certs:ro 
     restart: unless-stopped
     networks:
       - proxy_net
