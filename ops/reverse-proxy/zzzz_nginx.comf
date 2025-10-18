@@ -1,78 +1,66 @@
-# /etc/nginx/nginx.conf
-
-user  nginx;
-worker_processes auto;
-
-events {
-  worker_connections 1024;
-}
-
 http {
   include       /etc/nginx/mime.types;
   default_type  application/octet-stream;
-
-  sendfile            on;
-  tcp_nopush          on;
-  keepalive_timeout   65;
-
-  # Gzip for static assets
+  sendfile      on;
+  tcp_nopush    on;
+  keepalive_timeout  65;
   gzip on;
   gzip_types text/plain text/css application/json application/javascript application/xml image/svg+xml;
-  gzip_min_length 256;
 
-  # Use Docker's embedded DNS and periodically re-resolve names
+  # Use Docker's embedded DNS and allow periodic re-resolution
   resolver 127.0.0.11 valid=30s ipv6=off;
+
+  # Define backend targets as variables (forces runtime DNS resolution)
+  set $web_backend  http://finance-web:3020;
+  set $api_backend  http://finance-api:8000;
+  set $radio_backend http://radio-collector:8080;
 
   server {
     listen 80;
     server_name _;
 
-    # Define backend targets as variables (valid here)
-    set $web_backend   finance-web:3020;
-    set $api_backend   finance-api:8000;
-    set $radio_backend radio-collector:8080;
-
-    # Common proxy headers
-    proxy_http_version 1.1;
-    proxy_set_header Connection "";
+    # Real IP/forwarded headers for the app and logs
     proxy_set_header Host $host;
     proxy_set_header X-Real-IP $remote_addr;
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
     proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_http_version 1.1;
+    proxy_set_header Connection "";
 
     # -------- Frontend (Next.js) --------
     location /_next/ {
       proxy_read_timeout 60s;
-      proxy_pass http://$web_backend;
+      proxy_pass $web_backend;
     }
 
     location / {
       proxy_read_timeout 60s;
-      proxy_pass http://$web_backend;
+      proxy_pass $web_backend;
     }
 
     # -------- API (strip /api) --------
-    # e.g. /api/foo -> http://finance-api:8000/foo
+    # e.g. /api/accounts -> http://finance-api:8000/accounts
     location /api/ {
       proxy_read_timeout 90s;
-      proxy_pass http://$api_backend/;   # trailing slash strips /api/
+      proxy_pass $api_backend/;   # trailing slash strips /api/
     }
 
-    # -------- Radio app under /radio/ --------
+    # -------- Radio app (host-based or path-based; pick ONE) --------
+    # Option A: subpath under this same virtual host
     location /radio/ {
       proxy_read_timeout 3600s;
       proxy_send_timeout 3600s;
-      proxy_buffering off;                 # nicer for streams
-      proxy_pass http://$radio_backend/;   # keep trailing slash for SPA paths
+      proxy_buffering off;              # nicer for long audio streams
+      proxy_pass $radio_backend/;       # keep trailing slash for SPA paths
     }
 
     # Optional: health passthrough
     location = /radio/healthz {
       add_header Cache-Control "no-store";
-      proxy_pass http://$radio_backend/healthz;
+      proxy_pass $radio_backend/healthz;
     }
 
-    # Proxy container health (always up)
+    # health, because you will forget
     location = /healthz {
       return 200 "ok\n";
       add_header Content-Type text/plain;

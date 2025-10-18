@@ -1,0 +1,99 @@
+http {
+  include       /etc/nginx/mime.types;
+  default_type  application/octet-stream;
+  sendfile      on;
+  tcp_nopush    on;
+  keepalive_timeout  65;
+  gzip on;
+  gzip_types text/plain text/css application/json application/javascript application/xml image/svg+xml;
+
+  # Upstreams: use docker service names + internal ports
+  upstream web_backend {
+    server finance-web:3020;
+  }
+
+  upstream api_backend {
+    server finance-api:8000;
+  }
+
+  # NEW: radio app upstream (the docker service must be named "radio-collector")
+  upstream radio_backend {
+    server radio-collector:8080;
+    keepalive 64;
+  }
+
+  # ---------------- EXISTING FINANCE SITE ----------------
+  server {
+    listen 80;
+    server_name _;
+
+    # Real IP/forwarded headers for the app and logs
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_http_version 1.1;
+    proxy_set_header Connection "";
+
+    # -------- Frontend (Next.js) --------
+    location /_next/ {
+      proxy_pass http://web_backend;
+      proxy_read_timeout 60s;
+    }
+
+    location / {
+      proxy_pass http://web_backend;
+      proxy_read_timeout 60s;
+    }
+
+    # -------- API (strip /api) --------
+    # e.g. /api/accounts -> http://finance-api:8000/accounts
+    location /api/ {
+      proxy_pass http://api_backend/;   # trailing slash strips /api/
+      proxy_read_timeout 90s;
+    }
+
+    # health, because you will forget
+    location = /healthz {
+      return 200 "ok\n";
+      add_header Content-Type text/plain;
+    }
+  }
+
+  # ---------------- NEW RADIO APP SITE ----------------
+  # Use a distinct host header to keep the SPA at the root (no subpath issues)
+  server {
+    listen 80;
+    server_name radio.lan;  # <-- set a LAN DNS/hosts entry for this name
+
+    # Streaming-friendly proxy settings
+    proxy_read_timeout 3600s;
+    proxy_send_timeout 3600s;
+    proxy_connect_timeout 60s;
+    proxy_http_version 1.1;
+    proxy_set_header Connection "";
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+
+    # Optional: compress static assets from the SPA
+    gzip on;
+    gzip_types text/plain text/css application/javascript application/json image/svg+xml;
+    gzip_min_length 256;
+
+    # Optional: reduce buffering for live audio
+    proxy_buffering off;
+
+    # App root (serves the built SPA and /api proxy from the Node server)
+    location / {
+      proxy_pass http://radio_backend;
+    }
+
+    # Health passthrough (handy for checks)
+    location = /healthz {
+      add_header Cache-Control "no-store";
+      proxy_pass http://radio_backend/healthz;
+    }
+  }
+}

@@ -269,17 +269,42 @@ services:
   reverse-proxy:
     image: nginx:1.27-alpine
     container_name: finance-proxy
-    depends_on:
-      - finance-web
-      - api
+    #depends_on:
+      #- finance-web
+      #- api
     ports:
       - "3020:80"         # expose one port to the LAN
     volumes:
       - ./ops/reverse-proxy/nginx.conf:/etc/nginx/nginx.conf:ro
     restart: unless-stopped
+    networks:
+      - proxy_net
+  
+  radio-collector:
+    build: ./radio-collector             # path to the submodule
+    image: radio-collector:latest
+    container_name: radio-collector
+    expose:
+      - "8080"                                  # internal only; proxy will handle external
+    environment:
+      - RADIO_BROWSER_BASE=https://de1.api.radio-browser.info
+      - PORT=8080
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    networks:
+      - proxy_net                               # must match your existing nginx network
 
 
 volumes:
   db_data:
   raw_data:
   backups:
+
+networks:
+  proxy_net:
+    driver: bridge
