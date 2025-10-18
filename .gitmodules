@@ -1,0 +1,4 @@
+[submodule "radio-collector"]
+	path = radio-collector
+	url = https://github.com/justin-napolitano/radio-collector.git
+	branch = main
